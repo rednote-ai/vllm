@@ -165,6 +165,67 @@ class MiddleAllReduceRMSNormPattern(_SequenceParallelPatternHelper):
             pm_pass,
         )
 
+class MiddleAllReduceAddRMSNormPattern(_SequenceParallelPatternHelper):
+    def __init__(self, epsilon: float, dtype: torch.dtype, device: str):
+        super().__init__(epsilon, dtype, device)
+        self.rmsnorm_matcher = MatcherFusedAddRMSNorm(epsilon)
+
+    def get_inputs(self):
+        mm_1 = torch.empty([4, 4], device=self.device, dtype=self.dtype)
+        arg22_1 = torch.empty([4, 4], device=self.device, dtype=self.dtype)
+        residual = torch.empty([4, 4], device=self.device, dtype=self.dtype)
+        rms_norm_weights = torch.empty([4, 4], device=self.device, dtype=self.dtype)
+
+        return [residual, mm_1, arg22_1, rms_norm_weights]
+
+    def register(self, pm_pass: PatternMatcherPass):
+        def pattern(
+            residual: torch.Tensor,
+            mm_1: torch.Tensor,
+            arg22_1: torch.Tensor,
+            rms_norm_weights: torch.Tensor,
+        ) -> tuple[torch.Tensor, torch.Tensor]:
+            all_reduce = self._all_reduce(mm_1)
+            add = all_reduce + arg22_1
+            rms, residual_out = self.rmsnorm_matcher(
+                add, rms_norm_weights, residual
+            )
+            return rms, residual_out
+
+        def replacement(
+            residual: torch.Tensor,
+            mm_1: torch.Tensor,
+            arg22_1: torch.Tensor,
+            rms_norm_weights: torch.Tensor,
+            scale: torch.Tensor,
+        ) -> tuple[torch.Tensor, torch.Tensor]:
+            reduce_scatter = self._reduce_scatter(mm_1)
+            local_len = reduce_scatter.size(0)
+            arg22_1 = arg22_1[
+                self.tp_rank * local_len : self.tp_rank * local_len + local_len, ...
+            ]
+            add = reduce_scatter + arg22_1
+            residual = residual[
+                self.tp_rank * local_len : self.tp_rank * local_len + local_len, ...
+            ]
+            rms, residual_out = self.rmsnorm_matcher(
+                add, rms_norm_weights, residual
+            )
+            all_gather = self._all_gather(rms)
+            
+            return all_gather, residual_out
+
+        pm.register_replacement(
+            pattern, replacement, self.get_inputs(), pm.fwd_only, pm_pass
+        )
+
+        pm.register_replacement(
+            get_first_out_wrapper(pattern),
+            get_first_out_wrapper(replacement),
+            self.get_inputs(),
+            pm.fwd_only,
+            pm_pass,
+        )
 
 FP8_DTYPE = current_platform.fp8_dtype()
 
@@ -278,6 +339,72 @@ class MiddleAllReduceRMSNormStaticFP8Pattern(_SequenceParallelPatternHelper):
             pm_pass,
         )
 
+class MiddleAllReduceAddRMSNormStaticFP8Pattern(_SequenceParallelPatternHelper):
+    def __init__(self, epsilon: float, dtype: torch.dtype, device: str):
+        super().__init__(epsilon, dtype, device)
+        self.rmsnorm_matcher = MatcherFusedAddRMSNorm(epsilon)
+        self.quant_matcher = MatcherQuantFP8(kFp8StaticTensorSym)
+
+    def get_inputs(self):
+        mm_1 = torch.empty([4, 4], device=self.device, dtype=self.dtype)
+        arg22_1 = torch.empty([4, 4], device=self.device, dtype=self.dtype)
+        residual = torch.empty([4, 4], device=self.device, dtype=self.dtype)
+        rms_norm_weights = torch.empty([4, 4], device=self.device, dtype=self.dtype)
+        scale = torch.empty([1, 1], device=self.device, dtype=torch.float32)
+
+        return [residual, mm_1, arg22_1, rms_norm_weights, scale]
+
+    def register(self, pm_pass: PatternMatcherPass):
+        def pattern(
+            residual: torch.Tensor,
+            mm_1: torch.Tensor,
+            arg22_1: torch.Tensor,
+            rms_norm_weights: torch.Tensor,
+            scale: torch.Tensor,
+        ) -> tuple[torch.Tensor, torch.Tensor]:
+            all_reduce = self._all_reduce(mm_1)
+            add = all_reduce + arg22_1
+            rms, residual_out = self.rmsnorm_matcher(
+                add, rms_norm_weights, residual
+            )
+            quant, _ = self.quant_matcher(rms, scale)
+            return quant, residual_out
+
+        def replacement(
+            residual: torch.Tensor,
+            mm_1: torch.Tensor,
+            arg22_1: torch.Tensor,
+            rms_norm_weights: torch.Tensor,
+            scale: torch.Tensor,
+        ) -> tuple[torch.Tensor, torch.Tensor]:
+            reduce_scatter = self._reduce_scatter(mm_1)
+            local_len = reduce_scatter.size(0)
+            arg22_1 = arg22_1[
+                self.tp_rank * local_len : self.tp_rank * local_len + local_len, ...
+            ]
+            add = reduce_scatter + arg22_1
+            residual = residual[
+                self.tp_rank * local_len : self.tp_rank * local_len + local_len, ...
+            ]
+            rms, residual_out = self.rmsnorm_matcher(
+                add, rms_norm_weights, residual
+            )
+            quant, _ = self.quant_matcher(rms, scale)
+            all_gather = self._all_gather(quant)
+
+            return all_gather, residual_out
+
+        pm.register_replacement(
+            pattern, replacement, self.get_inputs(), pm.fwd_only, pm_pass
+        )
+
+        pm.register_replacement(
+            get_first_out_wrapper(pattern),
+            get_first_out_wrapper(replacement),
+            self.get_inputs(),
+            pm.fwd_only,
+            pm_pass,
+        )
 
 class SequenceParallelismPass(VllmPatternMatcherPass):
     """
@@ -342,6 +469,9 @@ class SequenceParallelismPass(VllmPatternMatcherPass):
             MiddleAllReduceRMSNormStaticFP8Pattern(
                 epsilon, self.model_dtype, self.device
             ).register(self.patterns)
+            MiddleAllReduceAddRMSNormStaticFP8Pattern(
+                epsilon, self.model_dtype, self.device
+            ).register(self.patterns)
 
             # Normal RMSNorm patterns
             FirstAllReduceRMSNormPattern(
@@ -349,6 +479,9 @@ class SequenceParallelismPass(VllmPatternMatcherPass):
             ).register(self.patterns)
 
             MiddleAllReduceRMSNormPattern(
+                epsilon, self.model_dtype, self.device
+            ).register(self.patterns)
+            MiddleAllReduceAddRMSNormPattern(
                 epsilon, self.model_dtype, self.device
             ).register(self.patterns)
 
