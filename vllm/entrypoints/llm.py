@@ -167,6 +167,8 @@ class LLM:
             disable CUDA graph and always execute the model in eager mode.
             If False, we will use CUDA graph and eager execution in hybrid.
         enable_return_routed_experts: Whether to return routed experts.
+        enable_return_mm_embedding: Whether to return multimodal embeddings
+            in the output when processing multimodal inputs.
         disable_custom_all_reduce: See
             [ParallelConfig][vllm.config.ParallelConfig].
         hf_token: The token to use as HTTP bearer authorization for remote files
@@ -219,6 +221,7 @@ class LLM:
         cpu_offload_gb: float = 0,
         enforce_eager: bool = False,
         enable_return_routed_experts: bool = False,
+        enable_return_mm_embedding: bool = False,
         disable_custom_all_reduce: bool = False,
         hf_token: bool | str | None = None,
         hf_overrides: HfOverrides | None = None,
@@ -328,6 +331,7 @@ class LLM:
             cpu_offload_gb=cpu_offload_gb,
             enforce_eager=enforce_eager,
             enable_return_routed_experts=enable_return_routed_experts,
+            enable_return_mm_embedding=enable_return_mm_embedding,
             disable_custom_all_reduce=disable_custom_all_reduce,
             hf_token=hf_token,
             hf_overrides=hf_overrides,

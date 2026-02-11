@@ -191,6 +191,9 @@ class ModelRunnerOutput:
 
     # req_id -> num_nans_in_logits
     num_nans_in_logits: dict[str, int] | None = None
+    
+    # req_id -> mm_embedding (torch.Tensor on CPU)
+    mm_embeddings: dict[str, "torch.Tensor"] | None = None
 
     # information related to cudagraph execution
     cudagraph_stats: CUDAGraphStat | None = None

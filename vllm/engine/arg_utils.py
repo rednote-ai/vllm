@@ -983,6 +983,10 @@ class EngineArgs:
             "--enable-mm-embeds", **multimodal_kwargs["enable_mm_embeds"]
         )
         multimodal_group.add_argument(
+            "--enable-return-mm-embedding",
+            **multimodal_kwargs["enable_return_mm_embedding"],
+        )
+        multimodal_group.add_argument(
             "--media-io-kwargs", **multimodal_kwargs["media_io_kwargs"]
         )
         multimodal_group.add_argument(

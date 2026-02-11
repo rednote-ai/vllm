@@ -52,6 +52,9 @@ class CachedRequestState:
     # for pooling models
     pooling_params: PoolingParams | None = None
     pooling_states: PoolingStates | None = None
+    
+    # Multimodal embedding (on CPU) for returning to user
+    mm_embedding: "torch.Tensor | None" = None
 
     def __post_init__(self):
         self.num_prompt_tokens = length_from_prompt_token_ids_or_embeds(

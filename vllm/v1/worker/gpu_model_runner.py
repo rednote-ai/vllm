@@ -2762,6 +2762,19 @@ class GPUModelRunner(
                 self._execute_mm_encoder(scheduler_output)
                 mm_embeds, is_mm_embed = self._gather_mm_embeddings(scheduler_output)
 
+            # Capture multimodal embeddings if enabled
+            mm_config = self.vllm_config.multimodal_config
+            if mm_config and mm_config.enable_return_mm_embedding and mm_embeds:
+                # Store concatenated mm_embeds to CPU for each request
+                concatenated_embeds = torch.cat(mm_embeds, dim=0).cpu()
+                # For now, store in the first request that has mm_features
+                # TODO: Handle multiple requests with mm inputs in the same batch
+                for req_id in self.input_batch.req_ids:
+                    req_state = self.requests.get(req_id)
+                    if req_state and req_state.mm_features:
+                        req_state.mm_embedding = concatenated_embeds
+                        break
+
             # NOTE(woosuk): To unify token ids and soft tokens (vision
             # embeddings), we always use embeddings (rather than token ids)
             # as input to the multimodal model, even when the input is text.
@@ -3771,6 +3784,16 @@ class GPUModelRunner(
                     capturer.save_captured_experts(indices=self.slot_mapping)  # noqa
                 else:
                     logger.error("RoutedExpertsCapturer not initialized.")
+            
+            # Collect multimodal embeddings if enabled
+            mm_embeddings = None
+            mm_config = self.vllm_config.multimodal_config
+            if mm_config and mm_config.enable_return_mm_embedding:
+                mm_embeddings = {}
+                for req_id in req_ids_output_copy:
+                    req_state = self.requests.get(req_id)
+                    if req_state and req_state.mm_embedding is not None:
+                        mm_embeddings[req_id] = req_state.mm_embedding
 
             output = ModelRunnerOutput(
                 req_ids=req_ids_output_copy,
@@ -3783,6 +3806,7 @@ class GPUModelRunner(
                 if self.supports_mm_inputs
                 else None,
                 num_nans_in_logits=num_nans_in_logits,
+                mm_embeddings=mm_embeddings,
                 cudagraph_stats=cudagraph_stats,
             )
 

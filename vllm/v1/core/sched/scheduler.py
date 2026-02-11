@@ -1353,9 +1353,11 @@ class Scheduler(SchedulerInterface):
                 stopped = True
 
             routed_experts = None
+            mm_embedding = None
             finish_reason = None
             if stopped:
                 routed_experts = self._get_routed_experts(request)
+                mm_embedding = self._get_mm_embedding(request, model_runner_output)
 
                 # Capture finish_reason BEFORE _handle_stopped_request, which may
                 # reset the status to WAITING for streaming requests that continue.
@@ -1416,6 +1418,7 @@ class Scheduler(SchedulerInterface):
                         num_cached_tokens=request.num_cached_tokens,
                         num_external_computed_tokens=request.num_external_computed_tokens,
                         routed_experts=routed_experts,
+                        mm_embedding=mm_embedding,
                         num_nans_in_logits=request.num_nans_in_logits,
                     )
                 )
@@ -1542,6 +1545,20 @@ class Scheduler(SchedulerInterface):
         ).flatten()[:num_tokens]
 
         return self.routed_experts_reader.get_routed_experts(indices=slot_mapping)
+
+    def _get_mm_embedding(
+        self, request: Request, model_runner_output: ModelRunnerOutput
+    ) -> "torch.Tensor | None":
+        """Get multimodal embedding for a request if enabled."""
+        mm_config = self.vllm_config.multimodal_config
+        if not mm_config or not mm_config.enable_return_mm_embedding:
+            return None
+        
+        # Get mm_embedding from model_runner_output
+        if model_runner_output.mm_embeddings is None:
+            return None
+        
+        return model_runner_output.mm_embeddings.get(request.request_id)
 
     def _update_request_with_output(
         self, request: Request, new_token_ids: list[int]
