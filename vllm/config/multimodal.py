@@ -89,11 +89,12 @@ class MultiModalConfig:
     Only enable this flag for trusted users!"""
     enable_return_mm_embedding: bool = False
     """If `True`, enables returning multimodal embeddings in the output.
-    When a multimodal model processes inputs with non-text modalities (e.g., images,
-    audio, video), the multimodal embeddings will be captured and returned as
-    torch CPU tensors in the CompletionOutput.
-    
-    This is useful for extracting intermediate representations from multimodal models."""
+    When a multimodal model processes inputs with non-text modalities
+    (e.g., images, audio, video), the multimodal embeddings will be captured
+    and returned as torch CPU tensors in the ``CompletionOutput``.
+
+    This is useful for extracting intermediate representations from
+    multimodal models."""
     media_io_kwargs: dict[str, dict[str, Any]] = Field(default_factory=dict)
     """Additional args passed to process media inputs, keyed by modalities.
     For example, to set num_frames for video, set

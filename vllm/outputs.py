@@ -55,12 +55,17 @@ class CompletionOutput:
         return self.finish_reason is not None
 
     def __repr__(self) -> str:
+        mm_embedding_repr = (
+            f"tensor(shape={list(self.mm_embedding.shape)}, "
+            f"dtype={self.mm_embedding.dtype})"
+            if self.mm_embedding is not None else "None"
+        )
         return (
             f"CompletionOutput(index={self.index}, "
             f"text={self.text!r}, "
             f"token_ids={self.token_ids}, "
             f"routed_experts={self.routed_experts}, "
-            f"mm_embedding={self.mm_embedding}, "
+            f"mm_embedding={mm_embedding_repr}, "
             f"cumulative_logprob={self.cumulative_logprob}, "
             f"logprobs={self.logprobs}, "
             f"finish_reason={self.finish_reason}, "

@@ -2762,18 +2762,31 @@ class GPUModelRunner(
                 self._execute_mm_encoder(scheduler_output)
                 mm_embeds, is_mm_embed = self._gather_mm_embeddings(scheduler_output)
 
-            # Capture multimodal embeddings if enabled
+            # Capture multimodal embeddings per request if enabled.
+            # We read directly from encoder_cache which stores per-item
+            # encoder outputs keyed by mm_hash, avoiding the problem of
+            # mm_embeds being a flat list across all requests in the batch.
             mm_config = self.vllm_config.multimodal_config
-            if mm_config and mm_config.enable_return_mm_embedding and mm_embeds:
-                # Store concatenated mm_embeds to CPU for each request
-                concatenated_embeds = torch.cat(mm_embeds, dim=0).cpu()
-                # For now, store in the first request that has mm_features
-                # TODO: Handle multiple requests with mm inputs in the same batch
+            if mm_config and mm_config.enable_return_mm_embedding:
                 for req_id in self.input_batch.req_ids:
                     req_state = self.requests.get(req_id)
-                    if req_state and req_state.mm_features:
-                        req_state.mm_embedding = concatenated_embeds
-                        break
+                    if req_state is None or not req_state.mm_features:
+                        continue
+                    # Already captured for this request, skip.
+                    if req_state.mm_embedding is not None:
+                        continue
+                    # Collect all encoder outputs for this request's
+                    # multimodal features from the encoder cache.
+                    req_mm_embeds = []
+                    for mm_feature in req_state.mm_features:
+                        mm_hash = mm_feature.identifier
+                        encoder_output = self.encoder_cache.get(mm_hash)
+                        if encoder_output is not None:
+                            req_mm_embeds.append(encoder_output)
+                    if req_mm_embeds:
+                        req_state.mm_embedding = torch.cat(
+                            req_mm_embeds, dim=0).to("cpu",
+                                                     non_blocking=True)
 
             # NOTE(woosuk): To unify token ids and soft tokens (vision
             # embeddings), we always use embeddings (rather than token ids)
@@ -3785,15 +3798,21 @@ class GPUModelRunner(
                 else:
                     logger.error("RoutedExpertsCapturer not initialized.")
             
-            # Collect multimodal embeddings if enabled
-            mm_embeddings = None
+            # Collect multimodal embeddings if enabled.
+            # After collecting, clear from req_state to free memory.
+            mm_embeddings: dict[str, torch.Tensor] | None = None
             mm_config = self.vllm_config.multimodal_config
             if mm_config and mm_config.enable_return_mm_embedding:
-                mm_embeddings = {}
                 for req_id in req_ids_output_copy:
                     req_state = self.requests.get(req_id)
                     if req_state and req_state.mm_embedding is not None:
+                        if mm_embeddings is None:
+                            mm_embeddings = {}
                         mm_embeddings[req_id] = req_state.mm_embedding
+                        # Clear to avoid holding the tensor in memory
+                        # longer than necessary. The embedding has been
+                        # transferred to mm_embeddings for output.
+                        req_state.mm_embedding = None
 
             output = ModelRunnerOutput(
                 req_ids=req_ids_output_copy,
