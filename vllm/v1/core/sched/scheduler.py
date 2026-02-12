@@ -1550,7 +1550,7 @@ class Scheduler(SchedulerInterface):
         self, request: Request, model_runner_output: ModelRunnerOutput
     ) -> "torch.Tensor | None":
         """Get multimodal embedding for a request if enabled."""
-        mm_config = self.vllm_config.multimodal_config
+        mm_config = self.vllm_config.model_config.multimodal_config
         if not mm_config or not mm_config.enable_return_mm_embedding:
             return None
         

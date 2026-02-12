@@ -2766,7 +2766,7 @@ class GPUModelRunner(
             # We read directly from encoder_cache which stores per-item
             # encoder outputs keyed by mm_hash, avoiding the problem of
             # mm_embeds being a flat list across all requests in the batch.
-            mm_config = self.vllm_config.multimodal_config
+            mm_config = self.model_config.multimodal_config
             if mm_config and mm_config.enable_return_mm_embedding:
                 for req_id in self.input_batch.req_ids:
                     req_state = self.requests.get(req_id)
@@ -3801,7 +3801,7 @@ class GPUModelRunner(
             # Collect multimodal embeddings if enabled.
             # After collecting, clear from req_state to free memory.
             mm_embeddings: dict[str, torch.Tensor] | None = None
-            mm_config = self.vllm_config.multimodal_config
+            mm_config = self.model_config.multimodal_config
             if mm_config and mm_config.enable_return_mm_embedding:
                 for req_id in req_ids_output_copy:
                     req_state = self.requests.get(req_id)
