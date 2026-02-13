@@ -16,15 +16,21 @@ from PIL import Image
 
 # Initialize LLM with enable_return_mm_embedding=True
 llm = LLM(
-    model="llava-hf/llava-1.5-7b-hf",
+    model="Qwen/Qwen3-VL-4B-Instruct",
     enable_return_mm_embedding=True,
-    max_model_len=2048,
+    max_model_len=4096,
     limit_mm_per_prompt={"image": 1},
 )
 
 # Prepare multimodal input
 image = Image.open("path/to/image.jpg")
-prompt = "<image>\nDescribe this image."
+prompt = (
+    "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
+    "<|im_start|>user\n"
+    "<|vision_start|><|image_pad|><|vision_end|>"
+    "Describe this image.<|im_end|>\n"
+    "<|im_start|>assistant\n"
+)
 
 # Generate
 sampling_params = SamplingParams(temperature=0.0, max_tokens=100)
@@ -51,7 +57,7 @@ for output in outputs:
 Start the server with the `--enable-return-mm-embedding` flag:
 
 ```bash
-vllm serve llava-hf/llava-1.5-7b-hf \
+vllm serve Qwen/Qwen3-VL-4B-Instruct \
     --enable-return-mm-embedding \
     --limit-mm-per-prompt image=1
 ```

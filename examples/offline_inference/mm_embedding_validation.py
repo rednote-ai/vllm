@@ -1,7 +1,7 @@
 """
 Validate multimodal embedding return with concurrent streaming requests.
 
-Anchor model: Qwen2.5-VL (also works with Qwen2-VL).
+Anchor model: Qwen3-VL (also works with Qwen2-VL / Qwen2.5-VL).
 
 This script:
   1. Initializes AsyncLLM with enable_return_mm_embedding, chunked prefill,
@@ -15,7 +15,7 @@ This script:
 Usage:
     python examples/offline_inference/mm_embedding_validation.py
     python examples/offline_inference/mm_embedding_validation.py \
-        --model Qwen/Qwen2-VL-7B-Instruct \
+        --model Qwen/Qwen3-VL-4B-Instruct \
         --num-images 4 --num-requests 40
 
 Requirements:
@@ -43,9 +43,9 @@ from vllm.v1.engine.async_llm import AsyncLLM
 # Constants
 # ---------------------------------------------------------------------------
 
-DEFAULT_MODEL = "Qwen/Qwen2.5-VL-3B-Instruct"
+DEFAULT_MODEL = "Qwen/Qwen3-VL-4B-Instruct"
 
-# Qwen2-VL / Qwen2.5-VL prompt template
+# Qwen3-VL / Qwen2.5-VL / Qwen2-VL prompt template
 PROMPT_TEMPLATE = (
     "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
     "<|im_start|>user\n"
