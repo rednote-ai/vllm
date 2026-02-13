@@ -8,9 +8,12 @@ This script:
      and prefix caching enabled.
   2. Sends many concurrent streaming requests, each containing an image.
   3. Validates that every finished request carries the correct mm_embedding:
+       - Tensor properties (type, device, ndim, non-empty, non-zero).
        - Same image  → identical embedding (bit-exact or within tolerance).
        - Different images → clearly different embeddings (low cosine similarity).
-       - Shape / dtype / device are consistent across all requests.
+       - Shape consistency across all requests using the same-sized images.
+       - shape[0] (num_vision_tokens) matches the expected value computed
+         from the Qwen3-VL processor / vision config.
 
 Usage:
     python examples/offline_inference/mm_embedding_validation.py
@@ -27,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import math
 import random
 import time
 from collections import Counter, defaultdict
@@ -94,6 +98,51 @@ def create_test_images(num_images: int, size: int = 336) -> list[Image.Image]:
     return images
 
 
+def compute_expected_image_tokens(
+    model_name: str,
+    image: Image.Image,
+    min_pixels: int,
+    max_pixels: int,
+) -> int:
+    """
+    Compute the expected number of vision tokens for a single image using
+    the model's processor / vision config.
+
+    This mirrors the logic in Qwen3VLProcessingInfo._get_vision_info():
+      1. smart_resize the image to (resized_h, resized_w) respecting
+         factor = patch_size * merge_size and the min/max pixel budget.
+      2. grid_h = resized_h / patch_size, grid_w = resized_w / patch_size
+      3. num_patches = grid_h * grid_w  (grid_t = 1 for images)
+      4. num_vision_tokens = num_patches / merge_size^2
+    """
+    from transformers import AutoConfig
+    from transformers.models.qwen2_vl.image_processing_qwen2_vl import (
+        smart_resize as image_smart_resize,
+    )
+
+    config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
+    vision_config = config.vision_config
+    patch_size = vision_config.patch_size
+    merge_size = vision_config.spatial_merge_size
+
+    factor = patch_size * merge_size
+    width, height = image.size  # PIL: (w, h)
+
+    resized_height, resized_width = image_smart_resize(
+        height=height,
+        width=width,
+        factor=factor,
+        min_pixels=min_pixels,
+        max_pixels=max_pixels,
+    )
+
+    grid_h = resized_height // patch_size
+    grid_w = resized_width // patch_size
+    num_patches = grid_h * grid_w  # grid_t = 1 for a single image
+    num_vision_tokens = num_patches // (merge_size ** 2)
+    return num_vision_tokens
+
+
 # ---------------------------------------------------------------------------
 # Single request coroutine
 # ---------------------------------------------------------------------------
@@ -134,6 +183,7 @@ async def stream_request(
 def validate_embeddings(
     results: list[tuple[str, torch.Tensor | None, str]],
     image_assignments: dict[str, int],
+    expected_token_counts: dict[int, int] | None = None,
 ) -> bool:
     """Run all validation checks.  Returns True iff everything passes."""
     passed = True
@@ -246,6 +296,59 @@ def validate_embeddings(
         print(f"  [FAIL] Multiple shapes found: {shapes}")
         passed = False
 
+    # ---- Check 5: shape[0] == expected image token count from processor ----
+    if expected_token_counts:
+        print("\n  --- Check 5: shape[0] matches processor image token count ---")
+        for img_idx in sorted(by_image):
+            expected = expected_token_counts.get(img_idx)
+            if expected is None:
+                continue
+            entries = by_image[img_idx]
+            for req_id, emb in entries:
+                actual = emb.shape[0]
+                if actual != expected:
+                    print(
+                        f"  [FAIL] Image {img_idx} ({req_id}): "
+                        f"shape[0]={actual}, expected {expected} "
+                        f"(from processor)"
+                    )
+                    passed = False
+            # Only print once per image if all match
+            if all(emb.shape[0] == expected for _, emb in entries):
+                print(
+                    f"  Image {img_idx}: shape[0]={expected} == "
+                    f"expected_image_tokens ({len(entries)} requests)"
+                )
+    else:
+        print("\n  --- Check 5: skipped (no expected token counts) ---")
+
+    # ---- Check 6: embedding statistics sanity ----
+    print("\n  --- Check 6: embedding statistics sanity ---")
+    for img_idx in sorted(by_image):
+        emb = by_image[img_idx][0][1].float()
+        mean_val = emb.mean().item()
+        std_val = emb.std().item()
+        min_val = emb.min().item()
+        max_val = emb.max().item()
+        # Check for NaN / Inf
+        if torch.isnan(emb).any():
+            print(f"  [FAIL] Image {img_idx}: embedding contains NaN")
+            passed = False
+        elif torch.isinf(emb).any():
+            print(f"  [FAIL] Image {img_idx}: embedding contains Inf")
+            passed = False
+        elif std_val < 1e-6:
+            print(
+                f"  [FAIL] Image {img_idx}: std={std_val:.6e} "
+                f"(nearly constant)"
+            )
+            passed = False
+        else:
+            print(
+                f"  Image {img_idx}: mean={mean_val:.4f}, "
+                f"std={std_val:.4f}, min={min_val:.4f}, max={max_val:.4f}"
+            )
+
     return passed
 
 
@@ -260,11 +363,16 @@ async def main(args: argparse.Namespace) -> None:
     print(f"  Anchor model: {args.model}")
     print("=" * 72)
 
+    min_pixels = args.min_pixels
+    max_pixels = args.max_pixels
+
     # ---- 1. Engine init ----
-    print(f"\n[1/4] Initializing AsyncLLM")
+    print(f"\n[1/5] Initializing AsyncLLM")
     print(f"  model               = {args.model}")
     print(f"  num_images          = {args.num_images}")
     print(f"  num_requests        = {args.num_requests}")
+    print(f"  min_pixels          = {min_pixels}")
+    print(f"  max_pixels          = {max_pixels}")
     print(f"  chunked_prefill     = True")
     print(f"  prefix_caching      = True")
     print(f"  return_mm_embedding = True")
@@ -279,8 +387,8 @@ async def main(args: argparse.Namespace) -> None:
         max_num_seqs=args.max_num_seqs,
         limit_mm_per_prompt={"image": 1},
         mm_processor_kwargs={
-            "min_pixels": 28 * 28,
-            "max_pixels": 1280 * 28 * 28,
+            "min_pixels": min_pixels,
+            "max_pixels": max_pixels,
         },
         enforce_eager=args.enforce_eager,
         tensor_parallel_size=args.tp,
@@ -291,7 +399,7 @@ async def main(args: argparse.Namespace) -> None:
 
     # ---- 2. Build requests ----
     print(
-        f"\n[2/4] Preparing {args.num_requests} requests "
+        f"\n[2/5] Preparing {args.num_requests} requests "
         f"with {args.num_images} distinct images"
     )
     test_images = create_test_images(args.num_images)
@@ -310,9 +418,25 @@ async def main(args: argparse.Namespace) -> None:
     dist = Counter(image_assignments.values())
     print(f"  distribution: {dict(sorted(dist.items()))}")
 
-    # ---- 3. Fire concurrent streaming requests ----
+    # ---- 3. Compute expected image token counts via processor ----
+    print(f"\n[3/5] Computing expected image token counts via processor …")
+    expected_token_counts: dict[int, int] = {}
+    for img_idx, img in enumerate(test_images):
+        expected = compute_expected_image_tokens(
+            model_name=args.model,
+            image=img,
+            min_pixels=min_pixels,
+            max_pixels=max_pixels,
+        )
+        expected_token_counts[img_idx] = expected
+        print(
+            f"  Image {img_idx}: size={img.size}, "
+            f"expected_vision_tokens={expected}"
+        )
+
+    # ---- 4. Fire concurrent streaming requests ----
     print(
-        f"\n[3/4] Sending {args.num_requests} concurrent streaming requests …"
+        f"\n[4/5] Sending {args.num_requests} concurrent streaming requests …"
     )
     sampling_params = SamplingParams(
         temperature=0.0,
@@ -330,9 +454,9 @@ async def main(args: argparse.Namespace) -> None:
         f"  done in {elapsed:.2f}s ({args.num_requests / elapsed:.1f} req/s)"
     )
 
-    # ---- 4. Validate ----
-    print(f"\n[4/4] Validating mm_embeddings …")
-    ok = validate_embeddings(results, image_assignments)
+    # ---- 5. Validate ----
+    print(f"\n[5/5] Validating mm_embeddings …")
+    ok = validate_embeddings(results, image_assignments, expected_token_counts)
 
     print("\n" + "=" * 72)
     if ok:
@@ -362,6 +486,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--tp", type=int, default=1)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--enforce-eager", action="store_true")
+    p.add_argument(
+        "--min-pixels", type=int, default=28 * 28,
+        help="Minimum pixel budget for image resizing",
+    )
+    p.add_argument(
+        "--max-pixels", type=int, default=1280 * 28 * 28,
+        help="Maximum pixel budget for image resizing",
+    )
     return p.parse_args()
 
 
