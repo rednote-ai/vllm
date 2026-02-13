@@ -197,7 +197,6 @@ class MiddleAllReduceAddRMSNormPattern(_SequenceParallelPatternHelper):
             mm_1: torch.Tensor,
             arg22_1: torch.Tensor,
             rms_norm_weights: torch.Tensor,
-            scale: torch.Tensor,
         ) -> tuple[torch.Tensor, torch.Tensor]:
             reduce_scatter = self._reduce_scatter(mm_1)
             local_len = reduce_scatter.size(0)
