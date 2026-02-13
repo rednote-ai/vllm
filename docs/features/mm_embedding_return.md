@@ -23,7 +23,7 @@ llm = LLM(
 )
 
 # Prepare multimodal input
-image = Image.open("path/to/image.jpg")
+image = Image.open("https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2-VL/boxes.png")
 prompt = (
     "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
     "<|im_start|>user\n"
