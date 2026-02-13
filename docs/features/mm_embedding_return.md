@@ -14,42 +14,43 @@ When processing multimodal inputs (e.g., images, audio, video) with a multimodal
 from vllm import LLM, SamplingParams
 from PIL import Image
 
-# Initialize LLM with enable_return_mm_embedding=True
-llm = LLM(
-    model="Qwen/Qwen3-VL-4B-Instruct",
-    enable_return_mm_embedding=True,
-    max_model_len=4096,
-    limit_mm_per_prompt={"image": 1},
-)
+if __name__ == "__main__":
+    # Initialize LLM with enable_return_mm_embedding=True
+    llm = LLM(
+        model="Qwen/Qwen3-VL-4B-Instruct",
+        enable_return_mm_embedding=True,
+        max_model_len=4096,
+        limit_mm_per_prompt={"image": 1},
+    )
 
-# Prepare multimodal input
-image = Image.open("https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2-VL/boxes.png")
-prompt = (
-    "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
-    "<|im_start|>user\n"
-    "<|vision_start|><|image_pad|><|vision_end|>"
-    "Describe this image.<|im_end|>\n"
-    "<|im_start|>assistant\n"
-)
+    # Prepare multimodal input
+    image = Image.open("https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2-VL/boxes.png")
+    prompt = (
+        "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
+        "<|im_start|>user\n"
+        "<|vision_start|><|image_pad|><|vision_end|>"
+        "Describe this image.<|im_end|>\n"
+        "<|im_start|>assistant\n"
+    )
 
-# Generate
-sampling_params = SamplingParams(temperature=0.0, max_tokens=100)
-outputs = llm.generate(
-    {
-        "prompt": prompt,
-        "multi_modal_data": {"image": image},
-    },
-    sampling_params=sampling_params,
-)
+    # Generate
+    sampling_params = SamplingParams(temperature=0.0, max_tokens=100)
+    outputs = llm.generate(
+        {
+            "prompt": prompt,
+            "multi_modal_data": {"image": image},
+        },
+        sampling_params=sampling_params,
+    )
 
-# Access the multimodal embedding
-for output in outputs:
-    for completion in output.outputs:
-        if completion.mm_embedding is not None:
-            print(f"MM Embedding shape: {completion.mm_embedding.shape}")
-            print(f"MM Embedding device: {completion.mm_embedding.device}")
-            # The embedding is a torch.Tensor on CPU
-            # Shape: (num_features, hidden_size)
+    # Access the multimodal embedding
+    for output in outputs:
+        for completion in output.outputs:
+            if completion.mm_embedding is not None:
+                print(f"MM Embedding shape: {completion.mm_embedding.shape}")
+                print(f"MM Embedding device: {completion.mm_embedding.device}")
+                # The embedding is a torch.Tensor on CPU
+                # Shape: (num_features, hidden_size)
 ```
 
 ### With vLLM Server
